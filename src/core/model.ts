@@ -140,7 +140,8 @@ export function parseDoc(raw: unknown): { ok: true; model: DocModel } | { ok: fa
       }
     }
     const block: DocModel['blocks'][number] = { id, height, edge };
-    if (startOnFront === true && i < n - 1) block.front = true;
+    // startOnFront 是块级标记（对最后一块同样有效），不像边界标记在末块被忽略。
+    if (startOnFront === true) block.front = true;
     blocks.push(block);
   }
 

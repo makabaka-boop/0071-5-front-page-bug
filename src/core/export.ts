@@ -62,7 +62,8 @@ export function buildExport(model: DocModel, result: PaginateResult, adoptedAt: 
       if (b.edge === BREAK) out.breakAfter = true;
       else if (b.edge === SAME) out.sameAfter = true;
     }
-    if (b.front === true && i === 0) out.startOnFront = true;
+    // 每个被标记块的 startOnFront 都原样写回（不仅是第一块），重新导入后约束完整恢复。
+    if (b.front === true) out.startOnFront = true;
     return out;
   });
 

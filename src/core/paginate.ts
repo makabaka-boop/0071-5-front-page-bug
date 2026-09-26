@@ -370,7 +370,7 @@ function paginateDuplex(model: DocModel, Hf: number, Hb: number): PaginateOutcom
     // j=i 的线在两侧查询都完成后才入队，保证页非空（j < i）。
     if (i < n && canStart(i)) {
       // 背面页不得以 startOnFront 标记块为首：该线不进入背面凸包。
-      if (Number.isFinite(dp[0][i])) pushLine(1, i, dp[0][i]);
+      if (Number.isFinite(dp[0][i]) && blocks[i].front !== true) pushLine(1, i, dp[0][i]);
       if (anyFront) {
         // 正面页前驱：正常交替 dp[1][i]，或前页为正面时插一张空白背面 dp[0][i] + Hb²。
         // 同价取不插空白（页数更少），保证相同输入结果稳定。

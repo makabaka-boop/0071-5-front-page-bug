@@ -1541,6 +1541,85 @@ describe('双面 startOnFront（正面起始 + 空白背面过渡页）', () => 
       expect(out.result.cost).toBe(5); // 与双面锁定用例一致
     }
   });
+
+  it('验收全链路：导入→计算→采纳→下载→重新导入→重算，末块/相邻/中间标记 × 正反不同容量', () => {
+    const stamp = '2026-09-26T00:00:00.000Z';
+    // 短文档：末块标记、相邻两个标记、中间标记（正>背 与 正<背 各一）。
+    // sides 为期望的正反页序（含空白过渡页），cost 为独立枚举确认过的最小代价。
+    const cases: Array<{
+      name: string;
+      json: string;
+      marks: boolean[];
+      sides: Array<'front' | 'back'>;
+      blanks: number;
+      cost: number;
+    }> = [
+      {
+        name: '末块标记（正 5 背 3）',
+        json: '{"pageHeight":5,"backPageHeight":3,"blocks":[{"id":"a","height":2},{"id":"b","height":3,"startOnFront":true}]}',
+        marks: [false, true],
+        sides: ['front', 'back', 'front'],
+        blanks: 1,
+        cost: 9 + 9 + 4, // F[2] 余3 + 空白背面 3² + F[3] 余2
+      },
+      {
+        name: '相邻两个标记（正 10 背 4）',
+        json: '{"pageHeight":10,"backPageHeight":4,"blocks":[{"id":"c1","height":3,"startOnFront":true},{"id":"c2","height":3,"startOnFront":true}]}',
+        marks: [true, true],
+        sides: ['front', 'back', 'front'],
+        blanks: 1,
+        cost: 49 + 16 + 49, // 两章各自独占正面页，中间夹一张空白背面 4²
+      },
+      {
+        name: '中间标记、正大于背（正 5 背 3）',
+        json: '{"pageHeight":5,"backPageHeight":3,"blocks":[{"id":"x","height":2},{"id":"y","height":2,"startOnFront":true},{"id":"z","height":2}]}',
+        marks: [false, true, false],
+        sides: ['front', 'back', 'front'],
+        blanks: 1,
+        cost: 9 + 9 + 1, // 空白背面必须显式计入，不得让背面页从标记块开始
+      },
+      {
+        name: '中间标记、背大于正（正 3 背 5）',
+        json: '{"pageHeight":3,"backPageHeight":5,"blocks":[{"id":"p","height":1},{"id":"q","height":2,"startOnFront":true},{"id":"r","height":1}]}',
+        marks: [false, true, false],
+        sides: ['front', 'back', 'front'],
+        blanks: 1,
+        cost: 4 + 25 + 0,
+      },
+    ];
+    for (const tc of cases) {
+      // 导入：每个 startOnFront 标记都进入工作台模型（含末块，不得丢失）
+      const parsed = parseDoc(JSON.parse(tc.json));
+      expect(parsed.ok, tc.name).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.model.blocks.map((b) => b.front === true)).toEqual(tc.marks);
+
+      // 计算：合法、与独立枚举最优值一致；正反页序与空白页数量符合预期
+      const out = paginate(parsed.model);
+      expectValidFront(parsed.model, out);
+      if (!out.ok) return;
+      expect(out.result.cost).toBe(bruteForceFront(parsed.model));
+      expect(out.result.cost).toBe(tc.cost);
+      expect(out.result.pages.map((p) => p.side)).toEqual(tc.sides);
+      expect(out.result.pages.filter((p) => p.blank === true)).toHaveLength(tc.blanks);
+
+      // 采纳 → 下载：导出块逐个保留 startOnFront（不仅是第一块）
+      const doc = buildExport(parsed.model, out.result, stamp);
+      expect(doc.blocks.map((b) => b.startOnFront === true)).toEqual(tc.marks);
+
+      // 重新导入：标记完整恢复；重算结果（代价、面别、空白页）逐项一致
+      const reparsed = parseDoc(JSON.parse(JSON.stringify(doc)));
+      expect(reparsed.ok, tc.name).toBe(true);
+      if (!reparsed.ok) return;
+      expect(reparsed.model.blocks.map((b) => b.front === true)).toEqual(tc.marks);
+      const out2 = paginate(reparsed.model);
+      expect(out2.ok, tc.name).toBe(true);
+      if (!out2.ok) return;
+      expect(out2.result).toEqual(out.result); // 采纳后重算保持同一面别
+      // 再次导出与首次逐项一致（采纳版本可复算、可复核）
+      expect(buildExport(reparsed.model, out2.result, stamp)).toEqual(doc);
+    }
+  });
 });
 
 function elapsedSafe(t0: number): number {
