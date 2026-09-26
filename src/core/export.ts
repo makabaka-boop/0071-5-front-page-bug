@@ -62,7 +62,7 @@ export function buildExport(model: DocModel, result: PaginateResult, adoptedAt: 
       if (b.edge === BREAK) out.breakAfter = true;
       else if (b.edge === SAME) out.sameAfter = true;
     }
-    if (b.front === true && i === 0) out.startOnFront = true;
+    if (b.front === true) out.startOnFront = true;
     return out;
   });
 

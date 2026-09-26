@@ -1543,6 +1543,211 @@ describe('双面 startOnFront（正面起始 + 空白背面过渡页）', () => 
   });
 });
 
+describe('startOnFront 回归验收：末块标记 / 相邻两标记 / 正反容量不同（短文档 · 独立枚举 · 导出往返）', () => {
+  /**
+   * 独立枚举（与生产 DP 完全无关的递归记忆化标准答案）：
+   * 枚举所有内容页切分与「正面后插空白背面」过渡，空白页恒为背面、代价 Hb²。
+   * 返回最小总代价；不可行返回 Infinity。
+   */
+  function enumerateOptimal(raw: unknown): number {
+    const parsed = parseDoc(raw);
+    if (!parsed.ok) return Infinity;
+    const { model } = parsed;
+    const Hf = model.pageHeight;
+    const Hb = model.backPageHeight!;
+    const blocks = model.blocks;
+    const n = blocks.length;
+    const S = [0];
+    for (const b of blocks) S.push(S[S.length - 1] + b.height);
+    const edgeAt = (i: number): Edge => (i < n - 1 ? blocks[i].edge : NONE);
+    const marked = (k: number) => blocks[k].front === true;
+
+    const pageOk = (s: number, e: number, side: 0 | 1): boolean => {
+      if (s > 0 && edgeAt(s - 1) === SAME) return false;
+      if (e < n && edgeAt(e - 1) === SAME) return false;
+      for (let k = s; k < e - 1; k++) {
+        if (blocks[k].edge === BREAK) return false;
+        if (marked(k + 1)) return false; // 标记块不得被包在页内
+      }
+      if (marked(s) && side === 1) return false; // 标记块不得作背面页首块
+      return true;
+    };
+
+    // f[prevSide][i]：从块 i 开始排、上一内容页面别为 prevSide 时的最小代价。
+    const f = [new Float64Array(n + 1), new Float64Array(n + 1)];
+    for (let i = n - 1; i >= 0; i--) {
+      for (let prev = 0; prev < 2; prev++) {
+        let best = Infinity;
+        for (const viaBlank of prev === 0 ? [false, true] : [false]) {
+          const side: 0 | 1 = viaBlank ? 0 : ((1 - prev) as 0 | 1);
+          const cap = side === 0 ? Hf : Hb;
+          for (let e = i + 1; e <= n; e++) {
+            const used = S[e] - S[i];
+            if (used > cap) break;
+            if (!pageOk(i, e, side)) continue;
+            const tail = f[side][e];
+            if (!Number.isFinite(tail)) continue;
+            const rem = cap - used;
+            best = Math.min(best, (viaBlank ? Hb * Hb : 0) + rem * rem + tail);
+          }
+        }
+        f[prev][i] = best;
+      }
+    }
+    return f[1][0];
+  }
+
+  interface ShortCase {
+    name: string;
+    raw: unknown;
+    marked: number[];
+    /** 期望页序列：[起块, 止块, 'front'|'back', 是否空白]，用于逐项核对面别与空白页 */
+    pages: Array<[number, number, 'front' | 'back', boolean]>;
+    cost: number;
+  }
+
+  const cases: ShortCase[] = [
+    {
+      // 末块带正面起始标记：必须在其后无内容的情况下独占正面页，前插空白背面。
+      name: '末块标记：正5背3、[2,3]，末块标记',
+      raw: {
+        pageHeight: 5,
+        backPageHeight: 3,
+        blocks: [
+          { id: 'a', height: 2 },
+          { id: 'b', height: 3, startOnFront: true },
+        ],
+      },
+      marked: [1],
+      pages: [
+        [0, 1, 'front', false],
+        [1, 1, 'back', true],
+        [1, 2, 'front', false],
+      ],
+      cost: 9 + 9 + 4,
+    },
+    {
+      // 相邻两个标记块：两章各起正面，中间恰有一张应计价的空白背面。
+      name: '相邻两个标记：正10背4、[3,3]，两块都标记',
+      raw: {
+        pageHeight: 10,
+        backPageHeight: 4,
+        blocks: [
+          { id: 'c1', height: 3, startOnFront: true },
+          { id: 'c2', height: 3, startOnFront: true },
+        ],
+      },
+      marked: [0, 1],
+      pages: [
+        [0, 1, 'front', false],
+        [1, 1, 'back', true],
+        [1, 2, 'front', false],
+      ],
+      cost: 49 + 16 + 49,
+    },
+    {
+      // 正背容量不同（正 > 背）：旧实现让背面页直接从标记块开始，
+      // 代价只算 9+1=10，漏掉应计价的空白背面（9）；正确代价 27。
+      name: '中间标记、正5背3：[2,2] 标记在块2',
+      raw: {
+        pageHeight: 5,
+        backPageHeight: 3,
+        blocks: [
+          { id: 'a', height: 2 },
+          { id: 'b', height: 2, startOnFront: true },
+        ],
+      },
+      marked: [1],
+      pages: [
+        [0, 1, 'front', false],
+        [1, 1, 'back', true],
+        [1, 2, 'front', false],
+      ],
+      cost: 9 + 9 + 9,
+    },
+    {
+      // 正背容量不同（背 > 正）：旧实现让背面页直接从标记块开始，
+      // 用「正[4] + 背[4,1]」代价 1+9=10，省掉应计价的空白背面（8²=64）；
+      // 正确方案为 正、空白背、正，代价 1+64+0=65。
+      name: '中间标记、正5背8：[4,4,1] 标记在块2',
+      raw: {
+        pageHeight: 5,
+        backPageHeight: 8,
+        blocks: [
+          { id: 'a', height: 4 },
+          { id: 'b', height: 4, startOnFront: true },
+          { id: 'c', height: 1 },
+        ],
+      },
+      marked: [1],
+      pages: [
+        [0, 1, 'front', false],
+        [1, 1, 'back', true],
+        [1, 3, 'front', false],
+      ],
+      cost: 1 + 64 + 0,
+    },
+  ];
+
+  for (const tc of cases) {
+    it(`${tc.name}：枚举最优代价、正反页序、空白页、导出后再次导入逐项一致`, () => {
+      // 1) 经真实导入路径（修复前末块标记会在此丢失）
+      const parsed = parseDoc(tc.raw);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      // 逐位核对标记（含末块与相邻两块）经真实导入路径后仍在
+      const frontFlags = parsed.model.blocks.map((b) => b.front === true);
+      expect(frontFlags).toEqual(parsed.model.blocks.map((_, k) => tc.marked.includes(k)));
+
+      // 2) 与独立枚举核对最优代价
+      expect(enumerateOptimal(tc.raw)).toBe(tc.cost);
+
+      // 3) 计算：全套硬性条件（面别交替、各页容量、标记块皆正面页首、回算代价）
+      const out = paginate(parsed.model);
+      expectValidDuplex(parsed.model, out);
+      if (!out.ok) return;
+      expect(out.result.cost).toBe(tc.cost);
+
+      // 4) 逐项核对正反页序与空白过渡页（空区间恒为背面、按完整背面容量计价）
+      expect(
+        out.result.pages.map((p) => [p.start, p.end, p.side, p.blank === true] as const),
+      ).toEqual(tc.pages.map(([s, e, side, blank]) => [s, e, side, blank] as const));
+      const Hb = parsed.model.backPageHeight!;
+      for (let i = 0; i < out.result.pages.length; i++) {
+        expect(out.result.pages[i].side).toBe(i % 2 === 0 ? 'front' : 'back');
+        if (out.result.pages[i].blank === true) {
+          expect(out.result.pages[i].side).toBe('back');
+          expect(out.result.pages[i].remaining).toBe(Hb);
+        }
+      }
+
+      // 5) 下载（导出）：每个标记都必须写回，而不是只保存第一块
+      const stamp = '2026-09-26T00:00:00.000Z';
+      const doc = buildExport(parsed.model, out.result, stamp);
+      expect(doc.blocks.map((b) => b.startOnFront === true)).toEqual(
+        parsed.model.blocks.map((_, k) => tc.marked.includes(k)),
+      );
+
+      // 6) 下载文件再次导入：标记全部恢复，采纳版本可复算，面别保持一致
+      const reparsed = parseDoc(JSON.parse(JSON.stringify(doc)));
+      expect(reparsed.ok).toBe(true);
+      if (!reparsed.ok) return;
+      expect(reparsed.model.backPageHeight).toBe(parsed.model.backPageHeight);
+      expect(reparsed.model.blocks.map((b) => b.front === true)).toEqual(
+        parsed.model.blocks.map((b) => b.front === true),
+      );
+      const out2 = paginate(reparsed.model);
+      expect(out2.ok).toBe(true);
+      if (!out2.ok) return;
+      // 采纳后重算：同一份文件必须复算出相同面别、相同空白页与相同代价
+      expect(out2.result).toEqual(out.result);
+      const doc2 = buildExport(reparsed.model, out2.result, stamp);
+      expect(doc2).toEqual(doc);
+      expectValidDuplex(reparsed.model, out2);
+    });
+  }
+});
+
 function elapsedSafe(t0: number): number {
   return performance.now() - t0;
 }
